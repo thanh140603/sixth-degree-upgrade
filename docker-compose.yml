@@ -1,0 +1,94 @@
+version: "3.9"
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    env_file:
+      - ./.env
+    volumes:
+      - ./backend/app/seed_names.txt:/app/seed_names.txt:ro
+    ports:
+      - "8080:8080"
+    depends_on:
+      - db
+      - redis
+
+  worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    env_file:
+      - ./.env
+    # Use 5 concurrent worker processes to balance speed and load
+    command: ["celery", "-A", "app.workers.celery_app:celery", "worker", "--loglevel=INFO", "--concurrency=5"]
+    depends_on:
+      - db
+      - redis
+    volumes:
+      - ./backend/app/seed_names.txt:/app/seed_names.txt:ro
+
+  beat:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    env_file:
+      - ./.env
+    command: ["celery", "-A", "app.workers.celery_app:celery", "beat", "--loglevel=INFO"]
+    depends_on:
+      - db
+      - redis
+    volumes:
+      - ./backend/app/seed_names.txt:/app/seed_names.txt:ro
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=sixth_degree
+    ports:
+      # Map container 5432 -> host 5433 to avoid conflict with local PostgreSQL
+      - "5433:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  frontend:
+    image: node:20-alpine
+    working_dir: /app
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0 --port 5174"
+    volumes:
+      - ./frontend:/app
+    ports:
+      - "5174:5174"
+    depends_on:
+      - api
+
+  kong:
+    image: kong:3.8
+    depends_on:
+      - api
+      - frontend
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /kong/declarative/kong.yml
+      KONG_PROXY_LISTEN: "0.0.0.0:8000"
+      KONG_ADMIN_LISTEN: "0.0.0.0:8001"
+    volumes:
+      - ./kong/kong.yml:/kong/declarative/kong.yml:ro
+    ports:
+      - "8000:8000"
+      - "8001:8001"
+
+volumes:
+  pg_data:
+  redis_data:
+
